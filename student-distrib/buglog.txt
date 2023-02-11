@@ -1,0 +1,117 @@
+Bug log for MP3, Checkpoint 1.
+
+Bugs: Cannot boot on one of the lab computers but everyone else's works fine with exact same code; seems to be a problem with the devel .qcow.
+Debug time: <5 mins to figure out it was working for everyone else. Answer was on piazza (need to run dos2unix on debug.sh)
+
+Exception Handlers:
+Compilation errors on VSCode, may just be because the C intellisense can't recognize the __atribute__(packed) so it thinks it's invalid
+syntax. If make has errors, then we know we have an actual problem.
+
+IDT: did not realize we had to make assembly wrappers for interrupt function
+Update: created macros and moved all idt initialization code into separate file
+Update 2: interrupts generated correctly, debug time around 3 hours
+
+Testing exceptions: boot loop reached again when tests are enabled; not setup correctly?
+Update: exception handler IS the problem.
+Update 2: successfully realizes an exception happens, but does not jump correctly. Is the descriptor set up incorrectly?
+Not only does it not jump to the write function but it seems to get lost in memory and thus GRUB restarts the OS and we are caught 
+in a boot loop.
+Update 3: We need to use assembly linkage
+Update 4: Debug time: 5 hours to realize we needed to set segment selector to KERNEL_CS (code segment)
+
+Paging: Did overly complicated structures at First
+Update: Discovered that structures were gibberish in actual memory
+Update 2: Changed to uints to avoid formatting issues
+Update 3: Debug time, around 6 hours while using struct and 3 min after switching to uint
+
+File Systems:
+finding starting address -> pointer to a pointer, need to derefence twice? 
+
+Honestly, VERY little bugs. We did notice that our printing was odd but quickly realized it was because 
+the file names were not always NULL terminated and thus printf wouldn't realize it should stop printing.
+Debug time: <30 minutes. We ran through GDB to see if it was our logic but the buffer *was* getting filled
+correctly. Also, not trouble with read_data; literally worked perfectly first try. We did have some bugs
+with our original read_dentry but that was because we drastically did not understand what we were meant
+to be doing. Once we completely redid our read by name, we needed to get the starting address correct, which
+took around 30 mins of debugging to find. Turns out we were using the wrong starting address which meant
+all of our other addresses were incorrect. Once that was fixed, it was smooth sailing.
+
+Keyboard:
+The backspace_on_screen() we wrote leaves the first character undeleted on the screen if there is a new line, though it is actually deleted in the buffer.
+Debug time: <30 minutes. We added a new function to check the situation that screen_x = 0 and screen_y > 0, so the backspace functions would cover all cases.
+
+Ctrl+L or Ctrl_l cleared the screen, but if we do this after typing something, the buffer still had the previous characters we typed.
+Debug time: <10 minutes. We added a call to terminal_open() which resets the buffer when Ctrl+L or Ctrl+l.
+
+
+CP3:
+System call linkage skips the first line, which causes an error.
+^ We think it's caused from something with our stack. 
+^ Update 2: We were calling code as if it was from user space in kernel space, which makes no sense. Linkage is likely working.
+Everything worked except iret so we will assume it works.
+
+Execute: we were reading bytes 27-24 backward, so we ended up with a really weird address that didn't work and ended with
+a general protection fault. After 2 hours, we realized that may have been the issue and we ended up with a way closer address
+if we did it backwards. (0x080482e8 after we switched to use bytes 27-24 instead of 24-27.)
+
+Process number problem: we had a buffer that was exceedingly long which ended up overwriting our PCB block. To fix, we just
+shortened our buffer to only be 40 bytes
+
+CP4: 
+
+ls: printed out a . and fault at the end; solved by checking our bounds of what dentries we are using (debug time <10 mins)
+
+cat: prints nothing, page faults. -> after 1 hour of debugging, we realized we stopped writing after a newline. After removing,
+we also fixed a syserr bug where it didn't print the TOTAL TEST RESULTS: PASS line. Still page faults but prints whole file.
+(~ 1 hour of debugging)
+
+Get_args -> caused page fault. Caused by not checking to see if we were over the limits of our buffer. 1 if statement later and 
+we no longer page fault (<20 mins to realize this was the cause by gdbing through it)
+
+Grep -> we accidentally set the files to closed when they are not closed, which caused our grep to fail. As soon as we removed
+this line, grep worked. (<10 mins)
+
+Pingpong -> RTC was not generating interrupts since it was during a system call. To fix this, we eventually realized we could just
+enable interrupts. We first put it in an rtc c function but it was moved into the system call linkage. (debug time: <2 hours)
+We also had a bug where we put an extra newline since we pre-emptively made newlines whenever we reached the end of a line
+instead of waiting for the next newline. After changing the order, we no longer had this issue.
+
+vidmap -> had a bug where flushing the TLB didn't return to vidmap. After fixing, works perfectly fine.
+
+
+------------------------------
+CP5:
+
+Updating the cursor didn't work on multiple terminals. Fixing this required storing cursor locations
+for multiple terminals, and updating the cursor locations whenever the terminals are changed
+
+Scheduling -> we forgot that we need to return out of scheduler and then return out of PIT handler(). Instead, we were just
+immediately ireting. We spent probably 7 hours debugging this until a TA realized we were going about it in a really silly way
+that forgets to pop off the registers and thus we page faulted. After we changed to a ret, scheduling seems to be mostly functioning.
+
+Still have an error with running long programs; likely stack issue or an issue when switching back to the program.
+
+video memory issue -> prints to different terminals whenever scheduling switches.
+
+phys: 0xB8, B9, BA, BB
+vir: 0xB8 points to terminal_on_display always
+
+solution:
+no solution. After probably around 6 hours of debugging, we were unable to find a solution to our scheduling video memory issue.
+We could have the keyboard always print the correct terminal memory, but the calls to system write were not synchronized which caused
+the results to get printed onto different shells 2/3 of the time for obvious reasons. We opted to simply comment out scheduling.
+
+Problem: base shell exiting -> after 1 hour of debugging, we have it working completely for terminal 2, but terminal 0 and 1 do not
+work properly. Previously, we could just rerun the terminal and reset process number and all that, but because we have 3 base terminals
+and programs on top of them, its a lot more complicated. Everything works until we try to halt, in which case we sometimes page fault.
+I have a feeling its something to do with process number since terminal 2 = process num 2 and therefore the previous logic of just
+decrementing worked fine.
+
+Problem: rtc stops generating interrupts after first frame in some user programs.
+Solution: add sti() into rtc_read so it doesnt get stuck. debug time: 1 hour
+^ we tried figuring out if there was an extranous cli(); there probably is, but we couldn't find it so the better method for time was
+to just insert an sti() into our rtc_read so we know interrupts are enabled.
+
+Problem: we start on third terminal because we initialize all 3 at the start.
+Solution: just switch terminal() after all 3 are initialized.
+^ debug time: <50 minutes, we just decided to do a simple solution instead of trying to change it to on-demand terminal creation.
